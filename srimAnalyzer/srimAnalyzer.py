@@ -30,7 +30,7 @@ import math
 ##User input##
 ##############
 #Specify target thickness
-targetThickness = 500 #nm
+targetThickness = 750 #nm
 
 #Specify SRIM files, incident proton energies
 energies = [2680,2690,2700]
@@ -42,7 +42,7 @@ binSize=2 #keV
 #Output filename
 outputFile=ROOT.TFile("srimOutputs.root","RECREATE")
 
-#Ignore any bins with less than 1% of neutrons to simplify source
+#Ignore any bins with less than 1% of neutrons to simplify source definition
 threshold_fraction=0.01 #fraction
 
 ################################
@@ -86,14 +86,15 @@ for i in range(0,len(e_p)):
 ######################
 dataStartLine=13 #Skip SRIM header info from transit file
 
-#Step through files and make proton energy hists
-protonEnergyHists=[]
+#Step through files and generate an array of proton energies
+protonEnergyLists=[]
+for i,filename in enumerate(filenames):
+  protonEnergyLists.append([])
+
 for i,filename in enumerate(filenames):
   #Open srim file
   f = open(filename,"r")
   
-  #Make histogram to hold proton energies from histogram
-  protonEnergyHists.append(ROOT.TH1D("protonEnergyHist_"+str(energies[i])+"keV",";Proton energy (keV);counts",6000,0,3000))
   #Keep track of line number
   lineNo=1
   
@@ -105,25 +106,12 @@ for i,filename in enumerate(filenames):
       line=line.strip("\n")
       #Split based on what space
       lineParts=line.split()
-      #Get proton energy in keV
-      proton_energy=float(lineParts[3])/1000.
+      #Get proton energy in keV, it starts in eV
+      protonEnergy=float(lineParts[3])/1000.
       #Add to histogram
-      protonEnergyHists[i].Fill(proton_energy)
+      protonEnergyLists[i].append(protonEnergy)
     lineNo+=1
   f.close()
-  
-###############################################
-##Correct for cross section energy dependence##
-###############################################
-#Now scale the proton energy histograms by the 7Li(p,n) x-sections
-for protonEnergyHist in protonEnergyHists:
-  nBins=protonEnergyHist.GetNbinsX()
-  for ibin in range(1,nBins+1):
-    #Only scale non-zero-bins
-    if protonEnergyHist.GetBinContent(ibin)>0:
-      binCenter=protonEnergyHist.GetBinCenter(ibin)
-      scaleFactor=liskienNeutronXSectionGraph.Eval(binCenter)
-      protonEnergyHist.SetBinContent(ibin,scaleFactor*protonEnergyHist.GetBinContent(ibin))
 
 ################################################
 ##Convert from proton energy to neutron energy##
@@ -134,25 +122,22 @@ neutronHist_bins=int((neutronHist_max-neutronHist_min)/binSize)
 
 #Now step through and convert from proton energy to neutron energy
 neutronEnergyHists=[]
-for i,protonEnergyHist in enumerate(protonEnergyHists):
+for i,protonEnergyList in enumerate(protonEnergyLists):
   #Make neutron hist
   neutronEnergyHists.append(ROOT.TH1D("neutronEnergyHist_"+str(energies[i])+"keV",";Neutron energy (keV);Counts",neutronHist_bins,neutronHist_min,neutronHist_max))
   
-  #Step through bins in proton energy hist, get the corresponding neutron energy
-  nBins=protonEnergyHist.GetNbinsX()
-  for ibin in range(1,nBins+1):
-    #Only get neutron energy if non-zero protons energy
-    if protonEnergyHist.GetBinContent(ibin)>0:
+  #Step through proton energies
+  for protonEnergy in protonEnergyList:
+  
+      #Get neutron energy, weighting factor
+      neutron_energy=liskienNeutronEnergyGraph.Eval(protonEnergy)
+      weightingFactor = liskienNeutronXSectionGraph.Eval(protonEnergy)
       
-      #Get mean proton energy in bin, and bin content
-      proton_energy=protonEnergyHist.GetBinCenter(ibin)
-      binContent=protonEnergyHist.GetBinContent(ibin)
-      #Get neutron energy
-      neutron_energy=liskienNeutronEnergyGraph.Eval(proton_energy)
       #Get neutron energy bin
       neutron_energy_bin=neutronEnergyHists[i].FindBin(neutron_energy)
+      
       #Add the proton bin contents to any content already in neutron energy bin
-      neutronEnergyHists[i].SetBinContent(neutron_energy_bin,neutronEnergyHists[i].GetBinContent(neutron_energy_bin)+binContent)
+      neutronEnergyHists[i].SetBinContent(neutron_energy_bin,neutronEnergyHists[i].GetBinContent(neutron_energy_bin)+weightingFactor)
 
 ########################################
 ##Scale and write neutron energy hists##
@@ -206,14 +191,3 @@ for i,neutronEnergyHist in enumerate(neutronEnergyHists):
   #Save histgrams
   outputFile.cd()
   neutronEnergyHist.Write()
-  
-####################################
-##Write normalized proton energies##
-####################################
-for protonEnergyHist in protonEnergyHists:
-
-  integral=protonEnergyHist.Integral()
-  protonEnergyHist.Scale(1./integral)
-  protonEnergyHist.Write()
-
-outputFile.Close()
